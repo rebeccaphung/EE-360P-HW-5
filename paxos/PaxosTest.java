@@ -19,6 +19,10 @@ public class PaxosTest {
             if(pxa[i] != null){
                 ret = pxa[i].Status(seq);
                 if(ret.state == State.Decided) {
+                    if(counter > 0 && !v.equals(ret.v)){
+                        int helpMe = 0;
+                    }
+                    System.out.println(i + " " + v + " " + ret.v + " " + pxa[i].seqInstances.get(seq).n_p + " " + pxa[i].seqInstances.get(seq).n_a + " " + pxa[i].seqInstances.get(seq).decidedVal);
                     assertFalse("decided values do not match: seq=" + seq + " i=" + i + " v=" + v + " v1=" + ret.v, counter > 0 && !v.equals(ret.v));
                     counter++;
                     v = ret.v;
@@ -145,6 +149,7 @@ public class PaxosTest {
         }
         int nd = ndecided(pxa, 1);
         assertFalse("a deaf peer heard about a decision " + nd, nd != npaxos-2);
+        System.out.println("Good Job");
 
         pxa[0].Start(1, "xxx");
         waitn(pxa, 1, npaxos-1);
@@ -173,7 +178,7 @@ public class PaxosTest {
 
         for(int i = 0; i < npaxos; i++){
             int m = pxa[i].Min();
-            assertFalse("Wrong initial Min() " + m + "on peer: " + i, m > 0);
+            assertFalse("Wrong initial Min() " + m + " on peer: " + i, m > 0);
         }
 
         pxa[0].Start(0,"00");

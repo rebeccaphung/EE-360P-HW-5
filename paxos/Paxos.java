@@ -40,32 +40,36 @@ public class Paxos implements PaxosRMI, Runnable{
         int sequence;
         int n_p; //highest prepare num seen
         int n_a; //highest accept num seen
+        int n;   //highest proposal num seen
         Object v_a; //highest accept value seen
         Object myVal; //value started
         Object decidedVal;
         State state;
+        ConcurrentHashMap<Object,Integer> valToN = new ConcurrentHashMap<>();
 
         public seqInstance(int sequence){
             this.sequence = sequence;
             n_p = 0;
             n_a = 0;
+            n= 0;
             v_a = null;
             state = State.Pending;
         }
     }
 
-    public synchronized seqInstance getInstance(int seq){
+    public seqInstance getInstance(int seq){ //lock and unlock??
+        mutex.lock();
         if(!seqInstances.containsKey(seq)){
             seqInstance newInst = new seqInstance(seq);
             seqInstances.put(seq, newInst);
         }
+        mutex.unlock();
         return seqInstances.get(seq);
     }
 
     ConcurrentHashMap<Integer, seqInstance> seqInstances = new ConcurrentHashMap<>();
     ConcurrentLinkedQueue<seqInstance> seqInstancesQueue = new ConcurrentLinkedQueue<>();
-    ConcurrentHashMap<Integer, Integer> maxDoneSequences = new ConcurrentHashMap<>(); //key = peer i, value = max seq
-    //ConcurrentHashMap<Integer, Object> sequenceValMap = new ConcurrentHashMap<>(); //key = sequence, value = decided val for that sequence
+    ArrayList<Integer> doneList = new ArrayList<>();    //ConcurrentHashMap<Integer, Object> sequenceValMap = new ConcurrentHashMap<>(); //key = sequence, value = decided val for that sequence
 
     /**
      * Call the constructor to create a Paxos peer.
@@ -82,9 +86,9 @@ public class Paxos implements PaxosRMI, Runnable{
         this.unreliable = new AtomicBoolean(false);
 
         // Your initialization code here
-        //for(int i = 0; i < peers.length; i++){
-        //    this.maxDoneSequences.put(i, -1);
-        //}
+        for(int i = 0; i < peers.length; i++){
+            this.doneList.add(i, -1);
+        }
         //n_p = 0;
         //n_a = 0;
         //v_a = null;
@@ -156,6 +160,7 @@ public class Paxos implements PaxosRMI, Runnable{
      */
     public void Start(int seq, Object value){
         // Your code here
+        //if(seq<Min()) return;
         seqInstance inst = getInstance(seq);
         this.sequence = seq;
         //this.myVal = value;
@@ -186,14 +191,17 @@ public class Paxos implements PaxosRMI, Runnable{
         //(b) If an acceptor receives an accept request for a proposal numbered
         //n, it accepts the proposal unless it has already responded to a prepare
         //request having a number greater than n.
-        //if(sequence < Min()) return;
+
         //seqInstance inst = getInstance(this.sequence);
         seqInstance inst = seqInstancesQueue.remove();
-
-        while(inst.state != State.Decided){
+        int seq = inst.sequence;
+        if(seq < Min()) return;
+        while(getInstance(seq).state != State.Decided){
             //phase 1
+            mutex.lock();
             int n = findHighestN(inst);
             Request prepareReq = new Request(n, inst.myVal, inst.sequence);
+            mutex.unlock();
             Response prepareResp = sendPrepareToPeers(prepareReq);
 
             //phase 2
@@ -202,21 +210,25 @@ public class Paxos implements PaxosRMI, Runnable{
                 Response acceptResp = sendAcceptToPeers(acceptReq);
 
                 if(acceptResp.acceptMajority == true){
-                    Request decideReq = new Request(acceptResp.n, acceptResp.v, inst.sequence);
-                    Response decideResp = sendDecideToPeers(decideReq);
+
+                        Request decideReq = new Request(acceptResp.n, acceptResp.v, inst.sequence);
+                        Response decideResp = sendDecideToPeers(decideReq);
+
 
                 }
             }
         }
     }
 
-    public int findHighestN(seqInstance inst){
-        return Math.max(inst.n_a, inst.n_p) + peers.length + me;
+    public synchronized int findHighestN(seqInstance inst){
+        //return (Math.max(inst.n_a, inst.n_p)*peers.length + 1)/peers.length + me;
+        return inst.n_p*peers.length + me + 1;
     }
 
 
     public Response sendPrepareToPeers(Request prepareReq){
         int acceptCount = 0;
+        int highestNA = prepareReq.proposalNum;
         Object tempVal = prepareReq.value;
         for(int i = 0; i < peers.length; i++){
             Response prepareResp;
@@ -229,38 +241,40 @@ public class Paxos implements PaxosRMI, Runnable{
 
             if(prepareResp != null && prepareResp.prepareOK == true){
                 acceptCount++;
-                if(prepareResp.n_a > prepareReq.proposalNum){
+                if(prepareResp.n_a > highestNA){
+                    highestNA = prepareResp.n_a;
                     tempVal = prepareResp.v_a;
                 }
             }
         }
 
         Response resp = new Response();
-        if(acceptCount > peers.length / 2 + 1){
+        if(acceptCount >= peers.length / 2 + 1){
             resp.prepareMajority = true;
             resp.n = prepareReq.proposalNum;
             resp.v = tempVal;
         }
-
         return resp;
     }
 
     // RMI handler
     public Response Prepare(Request req){
         // your code here
+        mutex.lock();
         seqInstance inst = getInstance(req.sequence);
         Response prepareResp = new Response();
 
-        mutex.lock();
+
         if(req.proposalNum > inst.n_p){
             inst.n_p = req.proposalNum;
             prepareResp.prepareOK = true;
         }
-        mutex.unlock();
 
         prepareResp.n = req.proposalNum;
         prepareResp.n_a = inst.n_a;
         prepareResp.v_a = inst.v_a;
+
+        mutex.unlock();
 
         return prepareResp;
     }
@@ -284,7 +298,7 @@ public class Paxos implements PaxosRMI, Runnable{
         }
 
         Response resp = new Response();
-        if(acceptCount > peers.length / 2 + 1){
+        if(acceptCount >= peers.length / 2 + 1){
             resp.acceptMajority = true;
             resp.n = acceptReq.proposalNum;
             resp.v = acceptReq.value;
@@ -296,36 +310,45 @@ public class Paxos implements PaxosRMI, Runnable{
 
     public Response Accept(Request req){
         // your code here
+        //if(getInstance(req.sequence).state == State.Decided) return new Response();
+        mutex.lock();
         seqInstance inst = getInstance(req.sequence);
         Response prepareResp = new Response();
 
-        mutex.lock();
+
         if(req.proposalNum >= inst.n_p){
             inst.n_p = req.proposalNum;
             inst.n_a = req.proposalNum;
             inst.v_a = req.value;
             prepareResp.acceptOK = true;
         }
-        mutex.unlock();
-        prepareResp.n = req.proposalNum;
 
+        prepareResp.n = req.proposalNum;
+        mutex.unlock();
         return prepareResp;
     }
 
     public Response sendDecideToPeers(Request decideReq){
         int minSeq = Integer.MAX_VALUE;
+        if(getInstance(decideReq.sequence).state == State.Decided) return null;
+        System.out.println(me  + " sending decide on value: " +decideReq.value);
         for(int i = 0; i < peers.length;i++){
             Response decideResp;
             if(me != i){
                 decideResp = Call("Decide",decideReq,i);
+                System.out.println(decideResp);
             }
             else{
                 decideResp = Decide(decideReq);
+                //System.out.println(decideResp);
             }
-            //if(this.maxDoneSequences.get(decideResp.peerNum) < decideResp.maxSeq) {
-            //    this.maxDoneSequences.put(decideResp.peerNum, decideResp.maxSeq);
-            //}
-
+            mutex.lock();
+            //System.out.println(doneList);
+            //System.out.println(decideResp);
+            if(this.doneList.get(decideResp.peerNum) < decideResp.maxSeq) {
+                this.doneList.add(decideResp.peerNum, decideResp.maxSeq);
+            }
+            mutex.unlock();
             //if(decideResp.maxSeq < minSeq){
             //    minSeq = decideResp.maxSeq;
             //}
@@ -342,18 +365,26 @@ public class Paxos implements PaxosRMI, Runnable{
 
     public Response Decide(Request req){
         // your code here
-        seqInstance inst = getInstance(req.sequence);
+        if(getInstance(req.sequence).state == State.Decided) return null;
+
         mutex.lock();
+        doneList.add(me,req.sequence);
+        seqInstance inst = getInstance(req.sequence);
+
+        inst.n_p = req.proposalNum;
+        inst.n_a = req.proposalNum;
         inst.decidedVal = req.value;
         inst.state = State.Decided;
-        mutex.unlock();
+
+        System.out.println(me + " decided on value " + req.value + " just to check, inst.decidedVal " + inst.decidedVal);
+
         //this.sequenceValMap.put(req.sequence, req.value);
 
         Response resp = new Response();
 
         resp.maxSeq = req.sequence;
         resp.peerNum = this.me;
-
+        mutex.unlock();
         return resp;
 
     }
@@ -425,7 +456,7 @@ public class Paxos implements PaxosRMI, Runnable{
     public int Min(){
         // Your code here
         int minSeq = Integer.MAX_VALUE;
-        for(int seq : this.maxDoneSequences.keySet()){
+        for(int seq : doneList){
             if(seq < minSeq){
                 minSeq = seq;
             }
@@ -448,8 +479,9 @@ public class Paxos implements PaxosRMI, Runnable{
      */
     public retStatus Status(int seq){
         // Your code here
-        seqInstance inst = getInstance(seq);
         mutex.lock();
+        seqInstance inst = getInstance(seq);
+
         retStatus stat = new retStatus(inst.state, inst.decidedVal);
          if(seq<Min()) {
             stat.state = State.Forgotten;
