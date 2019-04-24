@@ -228,6 +228,10 @@ public class Paxos implements PaxosRMI, Runnable{
 
                 }
             }
+            else{
+                inst.myVal = prepareResp.v;
+            }
+
         }
     }
 
@@ -239,7 +243,7 @@ public class Paxos implements PaxosRMI, Runnable{
 
     public Response sendPrepareToPeers(Request prepareReq){
         System.out.println(me + " sending prepare with sequence " + prepareReq.sequence);
-
+        Object failValue = null;
         int acceptCount = 0;
         int highestNA = prepareReq.proposalNum;
         Object tempVal = prepareReq.value;
@@ -259,6 +263,9 @@ public class Paxos implements PaxosRMI, Runnable{
                     tempVal = prepareResp.v_a;
                 }
             }
+            else if(prepareResp!= null && prepareResp.v_a != null){
+                failValue = prepareResp.v_a;
+            }
         }
 
         Response resp = new Response();
@@ -266,6 +273,9 @@ public class Paxos implements PaxosRMI, Runnable{
             resp.prepareMajority = true;
             resp.n = prepareReq.proposalNum;
             resp.v = tempVal;
+        }
+        else {
+            resp.v = failValue;
         }
         return resp;
     }
@@ -277,6 +287,7 @@ public class Paxos implements PaxosRMI, Runnable{
         seqInstance inst = getInstance(req.sequence);
         Response prepareResp = new Response();
 
+        //if(getInstance(req.sequence).state == State.Decided)
 
         if(req.proposalNum > inst.n_p){
             inst.n_p = req.proposalNum;
@@ -381,7 +392,7 @@ public class Paxos implements PaxosRMI, Runnable{
 
     public Response Decide(Request req){
         // your code here
-        if(getInstance(req.sequence).state == State.Decided) return null;
+        //if(getInstance(req.sequence).state == State.Decided) return null;
 
         mutex.lock();
         if(req.sequence > doneList.get(me)) {
