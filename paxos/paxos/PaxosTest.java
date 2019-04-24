@@ -110,7 +110,7 @@ public class PaxosTest {
         System.out.println("Test: Out-of-order instances ...");
         pxa[0].Start(7, 700);
         try {
-            Thread.sleep(2000);
+            Thread.sleep(100);
         } catch (Exception e){
             e.printStackTrace();
         }
@@ -228,7 +228,7 @@ public class PaxosTest {
             }
 
         }
-        assertFalse("Min() did not advance after Done()", ok != true);
+        assertFalse("Min() did not advance after Done(), Min = " + pxa[0].Min(), ok != true);
         System.out.println("... Passed");
         cleanup(pxa);
 

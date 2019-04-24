@@ -6,6 +6,7 @@ import java.rmi.registry.Registry;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -27,6 +28,7 @@ public class Paxos implements PaxosRMI, Runnable{
     // Your data here
 
     int sequence;
+    int highestDoneSeq = -1;
     /*
     int n_p; //highest prepare num seen
     int n_a; //highest accept num seen
@@ -160,13 +162,17 @@ public class Paxos implements PaxosRMI, Runnable{
      */
     public void Start(int seq, Object value){
         // Your code here
-        //if(seq<Min()) return;
+        //
+        //if(seq < Min()) return;
+        mutex.lock();
         seqInstance inst = getInstance(seq);
         this.sequence = seq;
         //this.myVal = value;
         inst.myVal = value;
 
         seqInstancesQueue.add(inst);
+        System.out.println("Put " + inst.sequence + " into Queue");
+        mutex.unlock();
 
         Thread t = new Thread(this);
         t.start();
@@ -194,12 +200,17 @@ public class Paxos implements PaxosRMI, Runnable{
 
         //seqInstance inst = getInstance(this.sequence);
         seqInstance inst = seqInstancesQueue.remove();
+        System.out.println("Sequence " + inst.sequence + " removed");
         int seq = inst.sequence;
-        if(seq < Min()) return;
-        while(getInstance(seq).state != State.Decided){
+        //if(seq < Min()) return;
+        System.out.println(seq + " has state "  + inst.state);
+        while(inst.state != State.Decided){
             //phase 1
+            System.out.println("Sequence " + inst.sequence + " paxos started");
             mutex.lock();
+            System.out.println("help");
             int n = findHighestN(inst);
+            System.out.println("n = " + n + " seq = " + inst.sequence);
             Request prepareReq = new Request(n, inst.myVal, inst.sequence);
             mutex.unlock();
             Response prepareResp = sendPrepareToPeers(prepareReq);
@@ -227,6 +238,8 @@ public class Paxos implements PaxosRMI, Runnable{
 
 
     public Response sendPrepareToPeers(Request prepareReq){
+        System.out.println(me + " sending prepare with sequence " + prepareReq.sequence);
+
         int acceptCount = 0;
         int highestNA = prepareReq.proposalNum;
         Object tempVal = prepareReq.value;
@@ -281,6 +294,7 @@ public class Paxos implements PaxosRMI, Runnable{
 
 
     public Response sendAcceptToPeers(Request acceptReq){
+        System.out.println(me + " sending accept with sequence " + acceptReq.sequence);
         int acceptCount = 0;
         for(int i = 0; i < peers.length;i++){
             Response acceptResp;
@@ -345,8 +359,10 @@ public class Paxos implements PaxosRMI, Runnable{
             mutex.lock();
             //System.out.println(doneList);
             //System.out.println(decideResp);
-            if(this.doneList.get(decideResp.peerNum) < decideResp.maxSeq) {
-                this.doneList.add(decideResp.peerNum, decideResp.maxSeq);
+            if(decideResp != null) {
+                if (this.doneList.get(decideResp.peerNum) < decideResp.maxSeq) {
+                    this.doneList.set(decideResp.peerNum, decideResp.maxSeq);
+                }
             }
             mutex.unlock();
             //if(decideResp.maxSeq < minSeq){
@@ -368,7 +384,9 @@ public class Paxos implements PaxosRMI, Runnable{
         if(getInstance(req.sequence).state == State.Decided) return null;
 
         mutex.lock();
-        doneList.add(me,req.sequence);
+        if(req.sequence > doneList.get(me)) {
+            //doneList.set(me, req.sequence);
+        }
         seqInstance inst = getInstance(req.sequence);
 
         inst.n_p = req.proposalNum;
@@ -382,7 +400,7 @@ public class Paxos implements PaxosRMI, Runnable{
 
         Response resp = new Response();
 
-        resp.maxSeq = req.sequence;
+        resp.maxSeq = this.highestDoneSeq;
         resp.peerNum = this.me;
         mutex.unlock();
         return resp;
@@ -397,11 +415,15 @@ public class Paxos implements PaxosRMI, Runnable{
      */
     public void Done(int seq) {
         // Your code here
+        doneList.set(me,seq);
+        mutex.lock();
+        highestDoneSeq = this.doneList.get(me);
         for(int doneSeq : this.seqInstances.keySet()){
             if(doneSeq < seq){
                 this.seqInstances.remove(doneSeq);
             }
         }
+        mutex.unlock();
     }
 
 
@@ -483,7 +505,7 @@ public class Paxos implements PaxosRMI, Runnable{
         seqInstance inst = getInstance(seq);
 
         retStatus stat = new retStatus(inst.state, inst.decidedVal);
-         if(seq<Min()) {
+         if(seq < Min() - 1) {
             stat.state = State.Forgotten;
         }
         mutex.unlock();
